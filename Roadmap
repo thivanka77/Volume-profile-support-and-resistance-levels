@@ -1,0 +1,11 @@
+V1 -visible range volume profile - done
+
+V2 - Add fixed range volume profile
+
+V3 - draw support and resistance lines on low volume nodes
+  Highight low volume nodes as support and resistance and draw support and resistance zone boxes in the chart.
+  It will identify the support and resistance levels based on the lowest volume node. 
+  We can add a function to define the lowest volume node distance from current candle.
+  There should be an option to change the number of support and resistance lines drawn on the chart.
+
+V4 - Add SMC visible confirmation
