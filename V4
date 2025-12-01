@@ -45,8 +45,8 @@ var line avgLine = na
 
 
 // Create PoC line once (global scope only)
-if barstate.isfirst and vp_display_poc
-    poc := line.new(bar_index, close, bar_index + 1, close, color=vp_poc_line_color, width=vp_poc_line_thickness)
+if barstate.isfirst
+    avgLine := line.new(bar_index, close, bar_index, close, color=avg_line_color, width=avg_line_width, style=avg_line_style == "Solid" ? line.style_solid : avg_line_style == "Dashed" ? line.style_dashed : line.style_dotted)
 
 //────────────────────────────────
 // FUNCTIONS
