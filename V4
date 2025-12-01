@@ -1,5 +1,5 @@
 //@version=6
-indicator("Volume Profile + SMC levels (Final)", shorttitle="VP SMC Final", overlay=true, max_bars_back=5000, max_lines_count=500)
+indicator("Volume Profile + SMC levels ", shorttitle="VP SMC ", overlay=true, max_bars_back=5000, max_lines_count=500)
 
 //────────────────────────────────
 // INPUTS
@@ -45,8 +45,8 @@ var line avgLine = na
 
 
 // Create PoC line once (global scope only)
-if barstate.isfirst and vp_display_poc
-    poc := line.new(bar_index, close, bar_index, close,                    color=vp_poc_line_color,                    width=vp_poc_line_thickness,                    style=line.style_solid)
+if barstate.isfirst
+    avgLine := line.new(bar_index, low, bar_index, high,     color=avg_line_color,     width=avg_line_width,    style=avg_line_style == "Solid" ? line.style_solid : avg_line_style == "Dashed" ? line.style_dashed : line.style_dotted)
 
 //────────────────────────────────
 // FUNCTIONS
