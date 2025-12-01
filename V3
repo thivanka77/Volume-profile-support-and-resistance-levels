@@ -23,6 +23,12 @@ sr_num_zones      = input.int(5, "Number of SR Zones", minval=1, maxval=20, grou
 sr_zone_color     = input.color(color.new(color.purple, 70), "SR Zone Color", group="Support/Resistance")
 sr_zone_width     = input.float(1.0, "Zone Width (%)", minval=0.1, maxval=5, group="Support/Resistance")
 
+// Average Volume Line styling
+avg_line_color = input.color(color.orange, "Average Line Color", group="Average Volume Line")
+avg_line_style = input.string("Dotted", "Average Line Style", options=["Solid","Dashed","Dotted"], group="Average Volume Line")
+avg_line_width = input.int(2, "Average Line Width", minval=1, maxval=5, group="Average Volume Line")
+
+
 //────────────────────────────────
 // VARIABLES
 //────────────────────────────────
@@ -31,6 +37,8 @@ var array<float> volumes   = array.new_float(0)
 var array<box> sr_boxes    = array.new_box()
 var array<label> sr_labels = array.new_label()
 var line poc               = na
+var line avgLine = na
+
 
 // Create PoC line once (global scope only)
 if barstate.isfirst and vp_display_poc
@@ -179,9 +187,38 @@ draw_sr_zones(lowest_price, price_interval) =>
             if array.size(sr_labels) > 0
                 label.delete(array.shift(sr_labels))
 
+if barstate.isfirst
+    avgLine := line.new(bar_index, low, bar_index, high, color=color.orange, width=2, style=line.style_dotted)
+
+//────────────────────────────────
+// Average Volume Line
+//────────────────────────────────
+draw_avg_volume_line(lowest_price, highest_price, price_interval) =>
+    float totalVol = 0.0
+    for i = 0 to vp_num_bars - 1
+        totalVol += array.get(volumes, i)
+    float avgVol = totalVol / vp_num_bars
+
+    float maxVol = array.max(volumes)
+    int scaledAvg = scale_volume(avgVol, maxVol)
+
+    int x2 = bar_index + vp_right_offset
+    int xAvg = x2 - scaledAvg
+
+    if not na(avgLine)
+        line.set_xy1(avgLine, xAvg, lowest_price), line.set_xy2(avgLine, xAvg, highest_price), line.set_color(avgLine, avg_line_color), line.set_width(avgLine, avg_line_width), line.set_style(avgLine, avg_line_style == "Solid" ? line.style_solid : avg_line_style == "Dashed" ? line.style_dashed : line.style_dotted)
+
+
+
+
 //────────────────────────────────
 // EXECUTION
 //────────────────────────────────
 [lowest_price, highest_price, price_interval] = calculate_vp()
 draw(lowest_price, highest_price, price_interval)
 draw_sr_zones(lowest_price, price_interval)
+draw_avg_volume_line(lowest_price, highest_price, price_interval)
+
+
+
+
