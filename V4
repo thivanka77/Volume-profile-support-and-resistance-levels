@@ -45,8 +45,8 @@ var line avgLine = na
 
 
 // Create PoC line once (global scope only)
-if barstate.isfirst
-    avgLine := line.new(bar_index, close, bar_index, close, color=avg_line_color, width=avg_line_width, style=avg_line_style == "Solid" ? line.style_solid : avg_line_style == "Dashed" ? line.style_dashed : line.style_dotted)
+if barstate.isfirst and vp_display_poc
+    poc := line.new(bar_index, close, bar_index, close,                    color=vp_poc_line_color,                    width=vp_poc_line_thickness,                    style=line.style_solid)
 
 //────────────────────────────────
 // FUNCTIONS
@@ -128,11 +128,13 @@ draw(lowest_price, highest_price, price_interval) =>
         line.set_width(ln, vp_bar_thickness)
 
     if vp_display_poc and not na(poc) and not na(max_idx)
-        float y_poc = lowest_price + price_interval * max_idx
+        y_poc = lowest_price + price_interval * max_idx
         line.set_xy1(poc, bar_index - vp_lookback_depth, y_poc)
-        line.set_xy2(poc, x2, y_poc)
+        line.set_xy2(poc, bar_index + vp_right_offset, y_poc)
         line.set_color(poc, vp_poc_line_color)
         line.set_width(poc, vp_poc_line_thickness)
+
+
 
 draw_sr_zones(lowest_price, price_interval) =>
     // Confirmed pivots (symmetric left=right=swing_sensitivity)
