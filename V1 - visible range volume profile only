@@ -1,0 +1,210 @@
+// @version=5
+indicator( title = 'EM Visible Range Volume Profile',     shorttitle = 'EM VRVP',     overlay = true,     max_lines_count = 300,     max_boxes_count = 100,     max_polylines_count = 100)
+
+// CONSTANTS
+var bool    vNull   = 0 == ta.sma(nz(volume), 3)
+var bool    vTick   = syminfo.volumetype == "tick"
+var bool    vQuote  = syminfo.volumetype == "quote"
+var int     t       = 1000 * timeframe.in_seconds()
+var int     visible = int((chart.right_visible_bar_time - chart.left_visible_bar_time) / t)
+var float   stretch = math.max(0.32 * visible, 80)
+var color   opacity = color.new(color.white, 100)
+
+// SETTINGS
+float   i_amp      = input.int(70, 'Width', 30, 100, 5) / 100
+int     i_rows     = input.int(120, 'Grid', 50, 250, 5)
+bool    i_delta_on = input.bool(false, 'Volume Delta')
+bool    i_quote_on = input.bool(false, 'In quoted units')
+bool    i_log_on   = input.bool(false, 'Logarithmic scale')
+bool    i_htf_on   = input.bool(false, 'HTF')
+string  i_htf      = input.string('Auto', '', ['Auto','15m','30m','45m','1h','2h','3h','4h','6h','8h','12h','1D','2D','3D','1W','2W','1M','2M','3M','6M','1Y'])
+bool    i_htf_iso  = input.bool(false, 'ISO')
+color   i_fill     = input.color(#abbed5)
+color   i_fill_vp  = input.color(color.new(#9ff159, 30))
+color   i_fill_vn  = input.color(color.new(#149dff, 40))
+color   i_other_c  = input.color(#617793)
+color   i_wrng_c   = input.color(#ff9800)
+string  i_lng      = input.string('English', '', ['English','Русский'])
+
+// HTF bars
+var int htf_time_0 = na
+var int htf_time_1 = na
+
+if i_htf == 'Auto'
+    i_htf := switch true
+        timeframe.isdaily   => '1M'
+        timeframe.isweekly  => '6M'
+        timeframe.ismonthly => '1Y'
+        timeframe.isminutes and timeframe.multiplier >= 120 => '1W'
+        timeframe.isminutes and timeframe.multiplier >= 5   => '1D'
+        => '1h'
+
+var string HTF = switch i_htf
+    '1h'  => '60'
+    '2h'  => '120'
+    '3h'  => '180'
+    '4h'  => '240'
+    '6h'  => '360'
+    '8h'  => '480'
+    '12h' => '720'
+    '1Y'  => '12M'
+    => str.replace(i_htf, 'm', '')
+
+HTF_Bar() =>
+    var box[]  Body  = array.new_box()
+    var line[] Line  = array.new_line()
+    var line[] High  = array.new_line()
+    var line[] Low   = array.new_line()
+    var label  TF    = label.new(chart.point.from_time(na, na), i_htf, xloc.bar_time, yloc.price, opacity, label.style_label_upper_left, i_other_c, size.normal, text.align_left)
+
+    [H, L, C, O, t1] = request.security(syminfo.tickerid, HTF, [high, low, close, open, time_close], barmerge.gaps_off, barmerge.lookahead_on)
+    var int t0 = na
+
+    if timeframe.change(HTF)
+        t0 := time
+        float body_0 = math.max(C, O)
+        float body_1 = C == body_0 ? O : C
+        int tm = int((t0 + t1)/2)
+        Body.push(box.new(t0, body_0, t1, body_1, i_other_c, 1, xloc=xloc.bar_time, bgcolor=opacity))
+        High.push(line.new(tm, body_0, tm, H, xloc.bar_time, extend.none, i_other_c, line.style_solid, 2))
+        Low.push(line.new(tm, body_1, tm, L, xloc.bar_time, extend.none, i_other_c, line.style_solid, 2))
+        Line.push(line.new(t0, O, t1, C, xloc.bar_time, extend.none, i_other_c, line.style_dashed, 1))
+
+    if barstate.islast
+        if 0 < Body.size()
+            float body_max = math.max(math.max(C, close), O)
+            float body_min = math.min(math.min(C, close), O)
+            box  b = Body.last(), b.set_top(body_max), b.set_bottom(body_min)
+            line h = High.last(), h.set_y1(body_max), h.set_y2(math.max(high, H))
+            line l = Low.last(),  l.set_y1(body_min), l.set_y2(math.min(low, L))
+            Line.last().set_xy2(t1, C)
+            TF.set_point(chart.point.from_time(t0, L))
+        else
+            t0 := chart.left_visible_bar_time - 1
+            t1 := chart.right_visible_bar_time + 1
+
+    if Body.size() == (i_delta_on ? 51 : 101)
+        Body.get(0).delete(), Body.shift()
+        High.get(0).delete(), High.shift()
+        Low.get(0).delete(),  Low.shift()
+        Line.get(0).delete(), Line.shift()
+
+    array.from(t0, t1)
+
+if i_htf_on
+    int[] htf = HTF_Bar()
+    htf_time_0 := htf.get(0)
+    htf_time_1 := htf.get(1)
+
+// Frame
+Frame() =>
+    var float max = na, var float min = na
+    if chart.left_visible_bar_time <= time and chart.right_visible_bar_time >= time
+        if high >= nz(max, high)
+            max := high
+        if low <= nz(min, low)
+            min := low
+    [max, min]
+
+[Max, Min] = Frame()
+
+// Rows
+var float[] Rows = array.new_float(i_rows+1, 0)
+if barstate.islast
+    var float step = (i_log_on ? math.log10(Max / Min) : Max - Min) / i_rows
+    for int n = 0 to i_rows
+        Rows.set(n, i_log_on ? math.pow(10, math.log10(Min) + n * step) : Min + n * step)
+
+// VP types
+type bar
+    float h
+    float l
+    float c
+    float v
+
+type Histogram
+    int LTime
+    int RTime
+    float[] Total
+    float[] Vp
+    float[] Vn
+    array<bar> Bars
+
+var array<Histogram> ARR = array.new<Histogram>()
+
+method update(array<float> id, int n, float value) => id.set(n, nz(id.get(n)) + value)
+
+method point(array<chart.point> id, int base, int amp, float q, float p) =>
+    id.push(chart.point.from_time(base, q))
+    id.push(chart.point.from_time(amp, q))
+    id.push(chart.point.from_time(amp, p))
+    id.push(chart.point.from_time(base, p))
+
+// LTF
+LTF(n) =>
+    var string res = timeframe.from_seconds(math.max(timeframe.in_seconds() / n, 60))
+    request.security_lower_tf(syminfo.tickerid, res, bar.new(high, low, close, nz(volume)))
+
+int ltf_n = 30
+while (ltf_n * visible > 5000 and ltf_n > 3)
+    ltf_n -= 1
+
+// Data collection
+if chart.left_visible_bar_time <= time and time <= chart.right_visible_bar_time
+    if (not i_htf_on and 0 == ARR.size()) or (i_htf_on and time == htf_time_0)
+        ARR.push(Histogram.new(            htf_time_0,            htf_time_1,            array.new_float(i_rows, 0),            array.new_float(i_rows, 0),            array.new_float(i_rows, 0),            array.new<bar>()        ))
+    if 0 != ARR.size()
+        for b in LTF(ltf_n)
+            ARR.last().Bars.push(b)
+
+// Calculation on last bar
+if barstate.islast
+    float max = 0
+    for H in ARR
+        for b in H.Bars
+            float v = b.v
+            if vNull or vTick
+                v := (b.h + b.l + b.c) / 3
+            if i_quote_on and not vQuote
+                v := v * (b.h + b.l + b.c) / 3
+            for int j = 0 to i_rows - 1
+                float q = Rows.get(j)
+                if b.h > q and q >= b.l
+                    if i_delta_on
+                        (b.c > q ? H.Vp : H.Vn).update(j, v)
+                        max := math.max(H.Vp.get(j), H.Vn.get(j), max)
+                    else
+                        H.Total.update(j, v)
+                        max := math.max(H.Total.get(j), max)
+
+    // Build profile
+    for H in ARR
+        if i_delta_on
+            array<chart.point> points_vp = array.new<chart.point>()
+            array<chart.point> points_vn = array.new<chart.point>()
+            int width = int((i_htf_on ? (H.RTime - H.LTime) / 2 : stretch * t * 0.5) * i_amp)
+            int base  = int(i_htf_on ? (H.LTime + H.RTime) / 2 : chart.left_visible_bar_time)
+            int amp   = base
+            if i_htf_iso
+                max := math.max(H.Vp.max(), H.Vn.max())
+            for int j = 0 to i_rows - 1
+                if 0 < H.Vp.get(j)
+                    amp := base + int(width * H.Vp.get(j) / max)
+                    points_vp.point(base, amp, Rows.get(j), Rows.get(j+1))
+                if 0 < H.Vn.get(j)
+                    amp := base - int(width * H.Vn.get(j) / max)
+                    points_vn.point(base, amp, Rows.get(j), Rows.get(j+1))
+            polyline.new(points_vp, false, false, xloc.bar_time, chart.bg_color, i_fill_vp)
+            polyline.new(points_vn, false, false, xloc.bar_time, chart.bg_color, i_fill_vn)
+        else
+            array<chart.point> points_total = array.new<chart.point>()
+            int width = int((i_htf_on ? H.RTime - H.LTime : stretch * t) * i_amp)
+            int base  = i_htf_on ? H.LTime : chart.left_visible_bar_time
+            int amp   = base
+            if i_htf_iso
+                max := H.Total.max()
+            for int j = 0 to i_rows - 1
+                if 0 < H.Total.get(j)
+                    amp := base + int(width * H.Total.get(j) / max)
+                    points_total.point(base, amp, Rows.get(j), Rows.get(j+1))
+            polyline.new(points_total, false, false, xloc.bar_time, chart.bg_color, i_fill)
