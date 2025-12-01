@@ -1,0 +1,244 @@
+//@version=6
+indicator("Volume Profile + SMC levels (Final)", shorttitle="VP SMC Final", overlay=true, max_bars_back=5000, max_lines_count=500)
+
+//────────────────────────────────
+// INPUTS
+//────────────────────────────────
+vp_lookback_depth      = input.int(500, "Fixed Range Lookback Depth [10-3000]", minval=10, maxval=3000, group="Lookback Period")
+
+vp_num_bars            = input.int(150, "Number of Volume Bins [10-490]", minval=10, maxval=490, group="Volume Bars")
+vp_bar_thickness       = input.int(2, "Volume Bar Thickness [1-30]", minval=1, maxval=30, group="Volume Bars")
+vp_bar_len_mult        = input.int(20, "Bar Length Multiplier [1-50]", minval=1, maxval=50, group="Volume Bars")
+vp_right_offset        = input.int(70, "Right Offset [0-400]", minval=0, maxval=400, group="Volume Bars")
+vp_volume_type         = input.string("Both", "Volume Type", options=["Both","Bullish","Bearish"], group="Volume Bars")
+vp_bar_color           = input.color(color.new(color.gray,50), "Volume Bar Color", group="Volume Bars")
+
+vp_display_poc         = input.bool(true, "Display Point of Control (PoC)", group="Point of Control")
+vp_poc_line_thickness  = input.int(2, "PoC Line Thickness [1-30]", minval=1, maxval=30, group="Point of Control")
+vp_poc_line_color      = input.color(color.red, "PoC Line Color", group="Point of Control")
+
+// Support/Resistance inputs
+swing_sensitivity = input.int(2, "Swing Sensitivity (bars)", minval=1, maxval=20, group="Support/Resistance")
+sr_num_zones      = input.int(5, "Number of SR Zones", minval=1, maxval=20, group="Support/Resistance")
+sr_zone_color     = input.color(color.new(color.purple, 70), "SR Zone Color", group="Support/Resistance")
+sr_zone_width     = input.float(1.0, "Zone Width (%)", minval=0.1, maxval=5, group="Support/Resistance")
+sr_mode = input.string("Swing+LVN", "SR Zone Mode", options=["Swing Only","LVN Only","Swing+LVN"], group="Support/Resistance")
+
+
+// Average Volume Line styling
+avg_line_color = input.color(color.orange, "Average Line Color", group="Average Volume Line")
+avg_line_style = input.string("Dotted", "Average Line Style", options=["Solid","Dashed","Dotted"], group="Average Volume Line")
+avg_line_width = input.int(2, "Average Line Width", minval=1, maxval=5, group="Average Volume Line")
+
+// LVN Threshold (% of average volume)
+lvn_threshold_perc = input.float(0.8, "LVN Threshold % of Average", minval=0.1, maxval=1.0, step=0.05, group="Support/Resistance")
+
+//────────────────────────────────
+// VARIABLES
+//────────────────────────────────
+var array<line> bars       = array.new_line()
+var array<float> volumes   = array.new_float(0)
+var array<box> sr_boxes    = array.new_box()
+var array<label> sr_labels = array.new_label()
+var line poc               = na
+var line avgLine = na
+
+
+// Create PoC line once (global scope only)
+if barstate.isfirst and vp_display_poc
+    poc := line.new(bar_index, close, bar_index + 1, close, color=vp_poc_line_color, width=vp_poc_line_thickness)
+
+//────────────────────────────────
+// FUNCTIONS
+//────────────────────────────────
+scale_volume(vol, max) =>
+    float d = max == 0 ? 1 : (max / vp_lookback_depth) / (vp_bar_len_mult / 100.0)
+    math.round(vol / d)
+
+calculate_vp() =>
+    if array.size(volumes) != vp_num_bars
+        array.clear(volumes)
+        for _ = 0 to vp_num_bars - 1
+            array.push(volumes, 0.0)
+    else
+        array.fill(volumes, 0)
+
+    int lb = math.min(vp_lookback_depth, bar_index + 1)
+    float highest_price_local = ta.highest(high, lb)
+    float lowest_price_local  = ta.lowest(low, lb)
+    float price_interval_local = (highest_price_local - lowest_price_local) / math.max(1, vp_num_bars - 1)
+
+    if price_interval_local == 0
+        mid = int(vp_num_bars / 2)
+        float acc = 0.0
+        for i = 0 to lb - 1
+            bool is_bullish  = close[i] >= open[i]
+            bool include_vol = vp_volume_type == "Both" ? true : (vp_volume_type == "Bullish" ? is_bullish : not is_bullish)
+            if include_vol
+                acc += volume[i]
+        array.set(volumes, mid, acc)
+    else
+        for i = 0 to lb - 1
+            bool is_bullish   = close[i] >= open[i]
+            bool include_vol  = vp_volume_type == "Both" ? true : (vp_volume_type == "Bullish" ? is_bullish : not is_bullish)
+            if include_vol
+                idx_low  = int(math.round((low[i] - lowest_price_local) / price_interval_local))
+                idx_high = int(math.round((high[i] - lowest_price_local) / price_interval_local))
+                idx_low  := math.max(0, idx_low)
+                idx_high := math.min(vp_num_bars - 1, idx_high)
+                for j = idx_low to idx_high
+                    array.set(volumes, j, array.get(volumes, j) + volume[i])
+
+    [lowest_price_local, highest_price_local, price_interval_local]
+
+is_lvn(idx) =>
+    float vol   = array.get(volumes, idx)
+    float left  = idx > 0 ? array.get(volumes, idx - 1) : vol
+    float right = idx < vp_num_bars - 1 ? array.get(volumes, idx + 1) : vol
+
+    // Calculate average volume across all bins
+    float totalVol = 0.0
+    for j = 0 to vp_num_bars - 1
+        totalVol += array.get(volumes, j)
+    float avgVol = totalVol / vp_num_bars
+
+    bool localDip      = vol < left and vol < right
+    bool belowThreshold = vol < avgVol * lvn_threshold_perc
+
+    localDip and belowThreshold
+
+
+draw(lowest_price, highest_price, price_interval) =>
+    if array.size(bars) < vp_num_bars
+        for _ = array.size(bars) to vp_num_bars - 1
+            array.push(bars, line.new(bar_index, close, bar_index, close, width=vp_bar_thickness))
+
+    float max_vol = array.max(volumes)
+    int max_idx   = array.indexof(volumes, max_vol)
+    int x2        = bar_index + vp_right_offset
+
+    for i = 0 to vp_num_bars - 1
+        int vol   = scale_volume(array.get(volumes, i), max_vol)
+        int x1    = x2 - vol
+        float y   = lowest_price + price_interval * i
+        line ln   = array.get(bars, i)
+        line.set_xy1(ln, x1, y)
+        line.set_xy2(ln, x2, y)
+        line.set_color(ln, max_idx == i ? vp_poc_line_color : vp_bar_color)
+        line.set_width(ln, vp_bar_thickness)
+
+    if vp_display_poc and not na(poc) and not na(max_idx)
+        float y_poc = lowest_price + price_interval * max_idx
+        line.set_xy1(poc, bar_index - vp_lookback_depth, y_poc)
+        line.set_xy2(poc, x2, y_poc)
+        line.set_color(poc, vp_poc_line_color)
+        line.set_width(poc, vp_poc_line_thickness)
+
+draw_sr_zones(lowest_price, price_interval) =>
+    // Confirmed pivots (symmetric left=right=swing_sensitivity)
+    float pivotLowVal  = ta.pivotlow(low,  swing_sensitivity, swing_sensitivity)
+    float pivotHighVal = ta.pivothigh(high, swing_sensitivity, swing_sensitivity)
+
+    // Pivot indices (pivot confirmed after `swing_sensitivity` bars)
+    int pivot_idx_low  = bar_index - swing_sensitivity
+    int pivot_idx_high = bar_index - swing_sensitivity
+
+    // Support from pivot low
+    if not na(pivotLowVal) and price_interval > 0
+        float swing_price = pivotLowVal
+        int idx = int(math.round((swing_price - lowest_price) / price_interval))
+        idx := math.max(0, idx)
+        idx := math.min(vp_num_bars - 1, idx)
+
+        bool condition =
+             (sr_mode == "Swing Only") ? true :
+             (sr_mode == "LVN Only")   ? is_lvn(idx) :
+             (sr_mode == "Swing+LVN")  ? is_lvn(idx) : false
+
+        if condition
+            float zone_half = price_interval * sr_zone_width
+            float y1 = swing_price - zone_half
+            float y2 = swing_price + zone_half
+            if y1 > y2
+                float tmp = y1
+                y1 := y2
+                y2 := tmp
+            // Anchor at pivot, extend to current bar
+            box b  = box.new(pivot_idx_low, y1, bar_index, y2, bgcolor=sr_zone_color, border_color=sr_zone_color)
+            array.push(sr_boxes, b)
+            label lbl = label.new(bar_index, swing_price, "Support", style=label.style_label_down, color=color.red)
+            array.push(sr_labels, lbl)
+
+    // Resistance from pivot high
+    if not na(pivotHighVal) and price_interval > 0
+        float swing_price_h = pivotHighVal
+        int idx_h = int(math.round((swing_price_h - lowest_price) / price_interval))
+        idx_h := math.max(0, idx_h)
+        idx_h := math.min(vp_num_bars - 1, idx_h)
+
+        bool condition_h =
+             (sr_mode == "Swing Only") ? true :
+             (sr_mode == "LVN Only")   ? is_lvn(idx_h) :
+             (sr_mode == "Swing+LVN")  ? is_lvn(idx_h) : false
+
+        if condition_h
+            float zone_half_h = price_interval * sr_zone_width
+            float yh1 = swing_price_h - zone_half_h
+            float yh2 = swing_price_h + zone_half_h
+            if yh1 > yh2
+                float tmp2 = yh1
+                yh1 := yh2
+                yh2 := tmp2
+            box bh  = box.new(pivot_idx_high, yh1, bar_index, yh2, bgcolor=sr_zone_color, border_color=sr_zone_color)
+            array.push(sr_boxes, bh)
+            label lblh = label.new(bar_index, swing_price_h, "Resistance", style=label.style_label_up, color=color.blue)
+            array.push(sr_labels, lblh)
+
+    // Safely extend existing boxes to current bar (only if any exist)
+    int sz = array.size(sr_boxes)
+    if sz > 0
+        for i = 0 to sz - 1
+            box bx = array.get(sr_boxes, i)
+            box.set_right(bx, bar_index)
+
+    // Cap counts for boxes and labels
+    int excess_boxes = array.size(sr_boxes) - sr_num_zones
+    if excess_boxes > 0
+        for _ = 0 to excess_boxes - 1
+            if array.size(sr_boxes) > 0
+                box.delete(array.shift(sr_boxes))
+
+    int excess_labels = array.size(sr_labels) - sr_num_zones
+    if excess_labels > 0
+        for _ = 0 to excess_labels - 1
+            if array.size(sr_labels) > 0
+                label.delete(array.shift(sr_labels))
+
+//────────────────────────────────
+// Average Volume Line
+//────────────────────────────────
+draw_avg_volume_line(lowest_price, highest_price, price_interval) =>
+    float totalVol = 0.0
+    for i = 0 to vp_num_bars - 1
+        totalVol += array.get(volumes, i)
+    float avgVol = totalVol / vp_num_bars
+
+    float maxVol = array.max(volumes)
+    int scaledAvg = scale_volume(avgVol, maxVol)
+
+    int x2 = bar_index + vp_right_offset
+    int xAvg = x2 - scaledAvg
+
+    if not na(avgLine)
+        line.set_xy1(avgLine, xAvg, lowest_price), line.set_xy2(avgLine, xAvg, highest_price), line.set_color(avgLine, avg_line_color), line.set_width(avgLine, avg_line_width), line.set_style(avgLine, avg_line_style == "Solid" ? line.style_solid : avg_line_style == "Dashed" ? line.style_dashed : line.style_dotted)
+
+
+
+
+//────────────────────────────────
+// EXECUTION
+//────────────────────────────────
+[lowest_price, highest_price, price_interval] = calculate_vp()
+draw(lowest_price, highest_price, price_interval)
+draw_sr_zones(lowest_price, price_interval)
+draw_avg_volume_line(lowest_price, highest_price, price_interval)
